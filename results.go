@@ -15,14 +15,18 @@ import (
 
 func readLinesFromFile(path string) string {
 	file, err := os.Open(path)
+	defer file.Close()
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		return "failed"
 	}
 	defer file.Close()
 	lines, err := ioutil.ReadAll(file)
 	if err != nil {
-		log.Fatal(err)
+		log.Print(err)
+		return "failed"
 	}
+
 	log.Println("File succesfully parsed")
 	return string(lines)
 }
@@ -61,13 +65,16 @@ func convertCsvToStructs(line [][]string, shuffle bool) []testPoint {
 }
 
 func answerAndCalculateResult(testPoints []testPoint, timeout int) {
-	var right, wrong int
+	right := 0
+	wrong := 0
 	fmt.Printf("WARNING - %v seconds is limit for this test\n", timeout)
-	channelForTimeoutCheck := make(chan string, 1)
-	go func() {
-		for i := 0; i < len(testPoints); i++ {
+	timer := time.NewTimer(time.Duration(timeout) * time.Second)
+	for i := 0; i < len(testPoints); i++ {
+		fmt.Printf("The question number %v is %v?\nYour answer:", i+1, testPoints[i].question)
+		answerChannel := make(chan string)
+		go func() {
+			var answer string
 			scanner := bufio.NewReader(os.Stdin)
-			fmt.Printf("The question number %v is %v?\nYour answer:", i+1, testPoints[i].question)
 			answer, err := scanner.ReadString('\n')
 			if err != nil {
 				log.Fatal(err)
@@ -75,36 +82,28 @@ func answerAndCalculateResult(testPoints []testPoint, timeout int) {
 			answer = strings.Replace(answer, "\n", "", 1)
 			answer = strings.Trim(answer, " ")
 			answer = strings.ToLower(answer)
-			if answer != testPoints[i].answer {
-				wrong++
-				fmt.Println("Wrong one!")
-			} else {
+			answerChannel <- answer
+		}()
+		select {
+		case <-timer.C:
+			fmt.Printf("\nYou are run out of time - %v seconds\n", timeout)
+			fmt.Printf("Total number of questions - %v\nThe nubmer of right answers - %v\n", right+wrong, right)
+			fmt.Printf("The number of wrong - %v\nPercentage of right - %.1f\n", wrong, float32(right)/float32(right+wrong)*100)
+			return
+		case answer := <-answerChannel:
+			if answer == testPoints[i].answer {
 				right++
 				fmt.Println("Right one!")
+			} else {
+				wrong++
+				fmt.Println("Wrong one!")
 			}
 		}
-		var rightPerc float32
-		rightPerc = float32(right) / float32(right+wrong) * 100
-		totalQuestions := right + wrong
-
-		fmt.Printf("Total number of questions - %v\nThe nubmer of right answers - %v\n", totalQuestions, right)
-		fmt.Printf("The number of wrong - %v\nPercentage of right - %.1f\n", wrong, rightPerc)
 		log.Println("Successfully calculated answers results")
-		channelForTimeoutCheck <- "Hooray, u are finished in time"
-	}()
-	select {
-	case result := <-channelForTimeoutCheck:
-		fmt.Println(result)
-	case <-time.After(time.Duration(timeout) * time.Second):
-		fmt.Println()
-		log.Fatalf("Program finished after timeout in %v seconds", timeout)
 	}
 }
 
-func flagsParse() (string, int, bool) {
-	var filePath string
-	var timeout int
-	var shuffle bool
+func flagsParse() (filePath string, timeout int, shuffle bool) {
 	flag.StringVar(&filePath, "path", "./problems.csv", "absolute path to the file")
 	flag.IntVar(&timeout, "timeout", 30, "timeout for test")
 	flag.BoolVar(&shuffle, "shuffle", false, "shuffle or not")
@@ -115,6 +114,9 @@ func flagsParse() (string, int, bool) {
 func main() {
 	filePath, timeout, shuffle := flagsParse()
 	linesFromFile := readLinesFromFile(filePath)
+	if linesFromFile == "failed" {
+		os.Exit(1)
+	}
 	linesParsed := parseCSV(linesFromFile)
 	var testPoints []testPoint
 	testPoints = convertCsvToStructs(linesParsed, shuffle)
